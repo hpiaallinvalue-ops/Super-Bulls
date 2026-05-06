@@ -1,15 +1,25 @@
+/**
+ * YouTube Feed Hook — Pipeline-Driven, Deterministic Data Delivery
+ *
+ * This hook is the bridge between the UI and the content pipeline.
+ * It manages:
+ *   - Initial data load (pipeline phase 1-6)
+ *   - Auto-refresh with stale-while-revalidate (every 10 min)
+ *   - Pagination via cached sorted results
+ *   - Error recovery with graceful degradation
+ *   - Category and sort state management
+ */
+
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Video } from '@/lib/mock-data';
-import { getMockVideos } from '@/lib/mock-data';
-import { cache } from '@/lib/cache';
-import { hasApiKey, searchSportsVideos } from '@/lib/youtube-api';
-import { rankVideos, sortByLatest } from '@/lib/ranking';
+import { runContentPipeline, getPipelineHealth, type FeedSort, type PipelineConfig, type PipelineResult } from '@/lib/content-pipeline';
 
 interface UseYouTubeFeedOptions {
   category?: string;
-  sort?: 'latest' | 'trending';
+  sort?: FeedSort;
+  perPage?: number;
 }
 
 interface UseYouTubeFeedReturn {
@@ -19,37 +29,25 @@ interface UseYouTubeFeedReturn {
   hasMore: boolean;
   loadMore: () => void;
   refresh: () => void;
-}
-
-const SEARCH_QUERIES: Record<string, string[]> = {
-  general: ['sports news today', 'latest sports highlights 2025'],
-  Football: ['football highlights', 'soccer news today'],
-  Basketball: ['NBA highlights', 'basketball news'],
-  Cricket: ['cricket highlights', 'cricket news today'],
-  MMA: ['UFC highlights', 'MMA news'],
-  Tennis: ['tennis highlights', 'ATP tour news'],
-  Baseball: ['MLB highlights', 'baseball news'],
-  Other: ['sports highlights', 'sports news today'],
-};
-
-function getCategoryQuery(category: string): string[] {
-  return SEARCH_QUERIES[category] || SEARCH_QUERIES.general;
-}
-
-function buildCacheKey(category: string, page: number, sort: string): string {
-  return `youtube_${category || 'all'}_p${page}_${sort}`;
+  pipelineLog: PipelineResult['pipelineLog'];
+  source: PipelineResult['source'];
+  health: ReturnType<typeof getPipelineHealth>;
 }
 
 export function useYouTubeFeed(options: UseYouTubeFeedOptions = {}): UseYouTubeFeedReturn {
-  const { category = 'All', sort = 'latest' } = options;
+  const { category = 'All', sort = 'latest', perPage = 12 } = options;
+
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(1);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [pipelineLog, setPipelineLog] = useState<PipelineResult['pipelineLog']>([]);
+  const [source, setSource] = useState<PipelineResult['source']>('cache');
+
   const fetchingRef = useRef(false);
-  const nextTokenRef = useRef<string | undefined>(undefined);
+  const allSortedRef = useRef<Video[]>([]); // Full sorted list for pagination
 
   const fetchVideos = useCallback(async (pageNum: number, isRefresh = false) => {
     if (fetchingRef.current) return;
@@ -61,80 +59,45 @@ export function useYouTubeFeed(options: UseYouTubeFeedOptions = {}): UseYouTubeF
       }
       setError(null);
 
-      // Try cache first
-      const cacheKey = buildCacheKey(category, pageNum, sort);
-      const cached = await cache.get<Video[]>(cacheKey);
+      const config: PipelineConfig = {
+        category,
+        sort,
+        page: pageNum,
+        perPage,
+        offlineMode: false,
+      };
 
-      if (cached && cached.length > 0 && isRefresh) {
-        // Stale-while-revalidate: show cached data, then fetch fresh
-        setVideos(prev => (pageNum === 1 ? cached : prev));
-      }
+      const result = await runContentPipeline(config);
 
-      if (hasApiKey()) {
-        // Try real API
-        try {
-          const queries = getCategoryQuery(category);
-          const query = queries[Math.floor(Math.random() * queries.length)];
-          const result = await searchSportsVideos(
-            query,
-            pageNum > 1 ? nextTokenRef.current : undefined
-          );
-
-          const newVideos = result.videos;
-
-          if (newVideos.length > 0) {
-            // Cache the results
-            await cache.set(cacheKey, newVideos);
-
-            setVideos(prev => {
-              if (pageNum === 1) return newVideos;
-              const existingIds = new Set(prev.map(v => v.videoId));
-              const unique = newVideos.filter(v => !existingIds.has(v.videoId));
-              return [...prev, ...unique];
-            });
-
-            setHasMore(!!result.nextPageToken);
-            nextTokenRef.current = result.nextPageToken;
-          } else {
-            setHasMore(false);
-          }
-        } catch {
-          // API failed, fall back to mock data
-          const mockVids = getMockVideos(category === 'All' ? undefined : category);
-          const sorted = sort === 'trending' ? rankVideos(mockVids) : sortByLatest(mockVids);
-          const paginated = sorted.slice(0, pageNum * 12);
-
-          setVideos(paginated);
-          setHasMore(paginated.length < sorted.length);
-          await cache.set(cacheKey, paginated);
-        }
+      if (pageNum === 1) {
+        // Store full sorted list for client-side pagination
+        allSortedRef.current = result.videos;
+        setVideos(result.videos);
       } else {
-        // Use mock data
-        await new Promise(r => setTimeout(r, 600)); // Simulate loading
-        const mockVids = getMockVideos(category === 'All' ? undefined : category);
-        const sorted = sort === 'trending' ? rankVideos(mockVids) : sortByLatest(mockVids);
-        const paginated = sorted.slice(0, pageNum * 12);
-
-        setVideos(paginated);
-        setHasMore(paginated.length < sorted.length);
-        await cache.set(cacheKey, paginated);
+        // Append new page
+        allSortedRef.current = [...allSortedRef.current, ...result.videos];
+        setVideos(allSortedRef.current);
       }
+
+      setHasMore(result.hasMore);
+      setPipelineLog(result.pipelineLog);
+      setSource(result.source);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch videos');
     } finally {
       setLoading(false);
       fetchingRef.current = false;
     }
-  }, [category, sort]);
+  }, [category, sort, perPage]);
 
-  // Initial load
+  // Initial load + category/sort changes
   useEffect(() => {
     setPage(1);
-    nextTokenRef.current = undefined;
+    allSortedRef.current = [];
     fetchVideos(1, false);
   }, [category, sort, refreshKey, fetchVideos]);
 
-  // Auto-refresh every 10 minutes
+  // Auto-refresh every 10 minutes (stale-while-revalidate)
   useEffect(() => {
     const interval = setInterval(() => {
       fetchVideos(1, true);
@@ -153,5 +116,17 @@ export function useYouTubeFeed(options: UseYouTubeFeedOptions = {}): UseYouTubeF
     setRefreshKey(k => k + 1);
   }, []);
 
-  return { videos, loading, error, hasMore, loadMore, refresh };
+  const health = getPipelineHealth();
+
+  return {
+    videos,
+    loading,
+    error,
+    hasMore,
+    loadMore,
+    refresh,
+    pipelineLog,
+    source,
+    health,
+  };
 }
