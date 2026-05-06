@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.zscripts/
+*.log
+*.tar.gz
+db/custom.db
+upload/
+examples/
+mini-services/
+bun.lock
