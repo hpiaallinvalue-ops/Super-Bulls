@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { useTheme } from 'next-themes';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RefreshCw, Sun, Moon, Zap, AlertCircle } from 'lucide-react';
+import { RefreshCw, Sun, Moon, Zap, AlertCircle, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { VideoCard } from '@/components/video-card';
@@ -13,6 +13,10 @@ import FooterAdBar from '@/components/footer-ad-bar';
 import FeedTabs, { type FeedTab } from '@/components/feed-tabs';
 import { useYouTubeFeed } from '@/hooks/use-youtube-feed';
 import { useHistory } from '@/hooks/use-history';
+import { useAuth } from '@/contexts/auth-context';
+import { SignInDialog } from '@/components/auth/sign-in-dialog';
+import { UserMenu } from '@/components/auth/user-menu';
+import { ApiKeysDialog } from '@/components/api-keys-dialog';
 import type { Video } from '@/lib/mock-data';
 
 // Skeleton card for loading state
@@ -56,7 +60,10 @@ export default function Home() {
   const observerRef = useRef<HTMLDivElement | null>(null);
 
   const { theme, setTheme } = useTheme();
+  const { user } = useAuth();
   const { history, addToHistory } = useHistory();
+  const [signInOpen, setSignInOpen] = useState(false);
+  const [apiKeysOpen, setApiKeysOpen] = useState(false);
 
   // Hydration-safe mounted check using useSyncExternalStore
   const mountedRef = useRef(false);
@@ -180,6 +187,19 @@ export default function Home() {
                       {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
                     </Button>
                   )}
+                  {user ? (
+                    <UserMenu onOpenApiKeys={() => setApiKeysOpen(true)} />
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 text-sm"
+                      onClick={() => setSignInOpen(true)}
+                    >
+                      <LogIn className="size-4" />
+                      <span className="hidden sm:inline">Sign In</span>
+                    </Button>
+                  )}
                 </div>
               </div>
             </header>
@@ -273,6 +293,10 @@ export default function Home() {
 
       {/* Footer ad bar */}
       <FooterAdBar />
+
+      {/* Auth dialogs */}
+      <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />
+      <ApiKeysDialog open={apiKeysOpen} onOpenChange={setApiKeysOpen} />
     </div>
   );
 }
