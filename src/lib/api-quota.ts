@@ -77,7 +77,10 @@ function getTodayPacific(): string {
   return pacific.toISOString().split('T')[0];
 }
 
+const isBrowser = typeof window !== 'undefined';
+
 function loadState(): QuotaState {
+  if (!isBrowser) return createFreshState();
   try {
     const raw = localStorage.getItem(QUOTA_KEY);
     if (!raw) return createFreshState();
@@ -101,6 +104,7 @@ function createFreshState(): QuotaState {
 }
 
 function saveState(state: QuotaState): void {
+  if (!isBrowser) return;
   try {
     // Only keep last 50 log entries to prevent localStorage bloat
     const trimmedLog = state.operationLog.slice(-50);

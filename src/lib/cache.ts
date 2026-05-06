@@ -8,10 +8,16 @@ const DB_NAME = 'super-bulls-cache';
 const STORE_NAME = 'api-cache';
 const DEFAULT_TTL = 10 * 60 * 1000; // 10 minutes
 
+const isBrowser = typeof window !== 'undefined';
+
+// In-memory fallback for SSR / environments without IndexedDB
+const memoryStore = new Map<string, CacheEntry<unknown>>();
+
 class CacheService {
   private dbPromise: Promise<IDBDatabase> | null = null;
 
   private async getDB(): Promise<IDBDatabase> {
+    if (!isBrowser) throw new Error('IndexedDB not available (SSR)');
     if (this.dbPromise) return this.dbPromise;
 
     this.dbPromise = new Promise((resolve, reject) => {
@@ -42,6 +48,12 @@ class CacheService {
   }
 
   async get<T>(key: string): Promise<T | null> {
+    // SSR / non-browser: use in-memory store
+    if (!isBrowser) {
+      const entry = memoryStore.get(key);
+      if (!entry || this.isExpired(entry)) return null;
+      return entry.data as T;
+    }
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
@@ -67,12 +79,17 @@ class CacheService {
   }
 
   async set<T>(key: string, data: T, ttl: number = DEFAULT_TTL): Promise<void> {
+    const entry: CacheEntry<T> = { data, timestamp: Date.now(), ttl };
+    // SSR / non-browser: use in-memory store
+    if (!isBrowser) {
+      memoryStore.set(key, entry);
+      return;
+    }
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         const store = tx.objectStore(STORE_NAME);
-        const entry: CacheEntry<T> = { data, timestamp: Date.now(), ttl };
         store.put(entry, key);
         tx.oncomplete = () => resolve();
         tx.onerror = () => {
@@ -87,6 +104,11 @@ class CacheService {
   }
 
   async clear(): Promise<void> {
+    // SSR / non-browser: clear in-memory store
+    if (!isBrowser) {
+      memoryStore.clear();
+      return;
+    }
     try {
       const db = await this.getDB();
       return new Promise((resolve) => {
@@ -97,8 +119,12 @@ class CacheService {
       });
     } catch {
       // Clear localStorage cache entries
-      const keys = Object.keys(localStorage).filter(k => k.startsWith('sb_cache_'));
-      keys.forEach(k => localStorage.removeItem(k));
+      try {
+        const keys = Object.keys(localStorage).filter(k => k.startsWith('sb_cache_'));
+        keys.forEach(k => localStorage.removeItem(k));
+      } catch {
+        // localStorage not available
+      }
     }
   }
 
@@ -133,9 +159,10 @@ class CacheService {
     return (history as Record<string, string>[]).map(v => v.videoId);
   }
 
-  // localStorage fallback
+  // localStorage fallback (browser only)
   private getLocal<T>(key: string): T | null {
     try {
+      if (!isBrowser) return null;
       const raw = localStorage.getItem(this.storageKey(key));
       if (!raw) return null;
       const entry: CacheEntry<T> = JSON.parse(raw);
@@ -151,6 +178,7 @@ class CacheService {
 
   private setLocal<T>(key: string, data: T, ttl: number): void {
     try {
+      if (!isBrowser) return;
       const entry: CacheEntry<T> = { data, timestamp: Date.now(), ttl };
       localStorage.setItem(this.storageKey(key), JSON.stringify(entry));
     } catch {
