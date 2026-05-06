@@ -1,24 +1,22 @@
 /**
- * YouTube Feed Hook — Pipeline-Driven, Deterministic Data Delivery
+ * YouTube Feed Hook — RSS-Powered, Zero API Key Required
  *
- * This hook is the bridge between the UI and the content pipeline.
- * It manages:
- *   - Initial data load (pipeline phase 1-6)
- *   - Auto-refresh with stale-while-revalidate (every 10 min)
- *   - Pagination via cached sorted results
- *   - Error recovery with graceful degradation
- *   - Category and sort state management
+ * Fetches from /api/feed (server-side RSS aggregation) and handles:
+ *   - Category filtering
+ *   - Sort by latest / trending (view count)
+ *   - Client-side pagination
+ *   - Auto-refresh every 10 minutes
+ *   - Graceful fallback to mock data on error
  */
 
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Video } from '@/lib/mock-data';
-import { runContentPipeline, getPipelineHealth, type FeedSort, type PipelineConfig, type PipelineResult } from '@/lib/content-pipeline';
 
 interface UseYouTubeFeedOptions {
   category?: string;
-  sort?: FeedSort;
+  sort?: 'latest' | 'trending';
   perPage?: number;
 }
 
@@ -29,104 +27,86 @@ interface UseYouTubeFeedReturn {
   hasMore: boolean;
   loadMore: () => void;
   refresh: () => void;
-  pipelineLog: PipelineResult['pipelineLog'];
-  source: PipelineResult['source'];
-  health: ReturnType<typeof getPipelineHealth>;
 }
 
 export function useYouTubeFeed(options: UseYouTubeFeedOptions = {}): UseYouTubeFeedReturn {
   const { category = 'All', sort = 'latest', perPage = 12 } = options;
 
-  const [videos, setVideos] = useState<Video[]>([]);
+  const [allVideos, setAllVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(1);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [pipelineLog, setPipelineLog] = useState<PipelineResult['pipelineLog']>([]);
-  const [source, setSource] = useState<PipelineResult['source']>('cache');
-
   const fetchingRef = useRef(false);
-  const allSortedRef = useRef<Video[]>([]); // Full sorted list for pagination
 
-  const fetchVideos = useCallback(async (pageNum: number, isRefresh = false) => {
+  const fetchFeed = useCallback(async (isRefresh = false) => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
 
     try {
-      if (!isRefresh) {
-        setLoading(true);
-      }
+      if (!isRefresh) setLoading(true);
       setError(null);
 
-      const config: PipelineConfig = {
-        category,
-        sort,
-        page: pageNum,
-        perPage,
-        offlineMode: false,
-      };
+      const params = new URLSearchParams({ category });
+      const response = await fetch(`/api/feed?${params}`);
+      if (!response.ok) throw new Error(`Feed error: ${response.status}`);
 
-      const result = await runContentPipeline(config);
+      const data = await response.json();
+      let videos: Video[] = data.videos || [];
 
-      if (pageNum === 1) {
-        // Store full sorted list for client-side pagination
-        allSortedRef.current = result.videos;
-        setVideos(result.videos);
+      // Sort client-side
+      if (sort === 'trending') {
+        videos = [...videos].sort((a, b) => b.viewCount - a.viewCount);
       } else {
-        // Append new page
-        allSortedRef.current = [...allSortedRef.current, ...result.videos];
-        setVideos(allSortedRef.current);
+        videos = [...videos].sort(
+          (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+        );
       }
 
-      setHasMore(result.hasMore);
-      setPipelineLog(result.pipelineLog);
-      setSource(result.source);
+      setAllVideos(videos);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch videos');
+      // Fallback to mock data
+      const { getMockVideos } = await import('@/lib/mock-data');
+      const mockVids = getMockVideos(category === 'All' ? undefined : category);
+      const sorted = sort === 'trending'
+        ? [...mockVids].sort((a, b) => b.viewCount - a.viewCount)
+        : [...mockVids].sort(
+            (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+          );
+      setAllVideos(sorted);
+      setError(err instanceof Error ? err.message : 'Failed to fetch feed');
     } finally {
       setLoading(false);
       fetchingRef.current = false;
     }
-  }, [category, sort, perPage]);
+  }, [category, sort]);
 
   // Initial load + category/sort changes
   useEffect(() => {
     setPage(1);
-    allSortedRef.current = [];
-    fetchVideos(1, false);
-  }, [category, sort, refreshKey, fetchVideos]);
+    fetchFeed();
+  }, [category, sort, refreshKey, fetchFeed]);
 
-  // Auto-refresh every 10 minutes (stale-while-revalidate)
+  // Auto-refresh every 10 minutes
   useEffect(() => {
     const interval = setInterval(() => {
-      fetchVideos(1, true);
+      fetchFeed(true);
     }, 10 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [fetchVideos]);
+  }, [fetchFeed]);
+
+  // Client-side pagination
+  const pageVideos = allVideos.slice(0, page * perPage);
+  const hasMore = pageVideos.length < allVideos.length;
 
   const loadMore = useCallback(() => {
     if (loading || !hasMore) return;
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchVideos(nextPage);
-  }, [loading, hasMore, page, fetchVideos]);
+    setPage(p => p + 1);
+  }, [loading, hasMore]);
 
   const refresh = useCallback(() => {
     setRefreshKey(k => k + 1);
   }, []);
 
-  const health = getPipelineHealth();
-
-  return {
-    videos,
-    loading,
-    error,
-    hasMore,
-    loadMore,
-    refresh,
-    pipelineLog,
-    source,
-    health,
-  };
+  return { videos: pageVideos, loading, error, hasMore, loadMore, refresh };
 }
