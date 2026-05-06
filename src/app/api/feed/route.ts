@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { fetchRSSFeed, parseRSSFeed } from '@/lib/youtube-rss';
 import { classifyVideo } from '@/lib/category-rules';
 import { TRUSTED_CHANNELS } from '@/config/channels';
+import { logError, extractErrorInfo } from '@/lib/error-logger';
 import type { Video } from '@/lib/mock-data';
 
 // ── In-memory Cache ───────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 // ── GET /api/feed?category=All&sort=latest ───────────────────────────────
 
 export async function GET(request: Request) {
+  try {
   const { searchParams } = new URL(request.url);
   const category = searchParams.get('category') || 'All';
 
@@ -50,6 +52,21 @@ export async function GET(request: Request) {
       return videos;
     })
   );
+
+  // Log any channel failures
+  for (let i = 0; i < settled.length; i++) {
+    if (settled[i].status === 'rejected') {
+      const channel = TRUSTED_CHANNELS[i];
+      const { message, stack } = extractErrorInfo(settled[i].reason);
+      logError({
+        source: 'api',
+        route: `/api/feed?category=${category}`,
+        message: `RSS fetch failed for ${channel.name}: ${message}`,
+        stack,
+        extra: { channelId: channel.id },
+      });
+    }
+  }
 
   // Merge successful results
   const allVideos: Video[] = [];
@@ -81,4 +98,19 @@ export async function GET(request: Request) {
     channels: TRUSTED_CHANNELS.length,
     fetchedFrom: settled.filter(r => r.status === 'fulfilled').length,
   });
+
+  } catch (err) {
+    const { message, stack, digest } = extractErrorInfo(err);
+    logError({
+      source: 'api',
+      route: `/api/feed`,
+      message,
+      stack,
+      digest,
+    });
+    return NextResponse.json(
+      { error: 'Feed temporarily unavailable', logged: true },
+      { status: 500 }
+    );
+  }
 }

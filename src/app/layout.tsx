@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, Oswald } from 'next/font/google';
 import { ThemeProvider } from 'next-themes';
 import { AuthProvider } from '@/contexts/auth-context';
+import { ErrorInitializer } from '@/components/error-initializer';
 import './globals.css';
 
 const inter = Inter({
@@ -39,6 +40,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange={false}
         >
+          <ErrorInitializer />
           <AuthProvider>
             {children}
           </AuthProvider>
