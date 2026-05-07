@@ -20,13 +20,14 @@ const RSS_PROXY_URL = 'https://www.youtube.com/feeds/videos.xml';
 
 export async function fetchRSSFeed(channelId: string): Promise<string> {
   const rssUrl = `${RSS_PROXY_URL}?channel_id=${channelId}`;
-  const apiUrl = `${RSS2JSON_BASE}?rss_url=${encodeURIComponent(rssUrl)}`;
+  const apiUrl = `${RSS2JSON_BASE}?rss_url=${encodeURIComponent(rssUrl)}&t=${Date.now()}`;
 
   const response = await fetch(apiUrl, {
     headers: {
       'Accept': 'application/json',
       'User-Agent': 'SuperBulls/1.0',
     },
+    cache: 'no-store',
     signal: AbortSignal.timeout(15_000), // 15s timeout
   });
 
