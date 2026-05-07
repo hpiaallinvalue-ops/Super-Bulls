@@ -4,7 +4,7 @@
  * No mock data. No fallbacks. Pure live RSS feeds via rss2json.com proxy.
  *
  * Architecture:
- *   - First request: initial load via poller (syncs channel states)
+ *   - First request: initial load via poller (parallel fetch for speed)
  *   - Subsequent requests: serve from buffer, fire-and-forget smart poll
  *   - Buffer persists in memory, fills progressively over time
  */
@@ -59,6 +59,8 @@ async function initializeBuffer(): Promise<void> {
     if (allVideos.length > 0) addToBuffer(allVideos);
   } catch {
     // Individual channel errors are handled inside pollChannelsByIds
+    // Mark as uninitialized so next request will retry
+    bufferInitialized = false;
   }
 }
 
