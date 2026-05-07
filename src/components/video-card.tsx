@@ -1,7 +1,6 @@
 'use client';
 
 import { memo } from 'react';
-import { motion } from 'framer-motion';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { CATEGORY_COLORS } from '@/config/categories';
@@ -38,10 +37,7 @@ function VideoCardInner({ video, onClick }: VideoCardProps) {
   const categoryColor = CATEGORY_COLORS[video.category] || CATEGORY_COLORS.Other;
 
   return (
-    <motion.div
-      whileHover={{ scale: 1.02, y: -4 }}
-      transition={{ duration: 0.2, ease: 'easeOut' }}
-    >
+    <div className="transition-transform duration-200 ease-out hover:scale-[1.02] hover:-translate-y-1">
       <Card
         className="overflow-hidden cursor-pointer border border-border/50 bg-card hover:shadow-lg transition-shadow duration-200 gap-0 py-0"
         onClick={() => onClick(video)}
@@ -95,7 +91,7 @@ function VideoCardInner({ video, onClick }: VideoCardProps) {
           </div>
         </div>
       </Card>
-    </motion.div>
+    </div>
   );
 }
 

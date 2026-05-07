@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
 import { ArrowLeft, ExternalLink, Eye, ThumbsUp, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -64,13 +63,7 @@ function VideoPlayer({
   }, []);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, x: 20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      transition={{ duration: 0.3 }}
-      className="pb-16"
-    >
+    <div className="animate-slide-in-right pb-16">
       {/* Back button */}
       <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border px-4 py-3 flex items-center gap-3">
         <Button
@@ -196,7 +189,7 @@ function VideoPlayer({
           )}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }
 

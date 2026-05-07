@@ -11,7 +11,7 @@ const openNextConfig: OpenNextConfig = {
       queue: "dummy",
     },
   },
-  edgeExternals: ["node:crypto", "lodash", "firebase", "firebase/app", "firebase/auth", "firebase/firestore"],
+  edgeExternals: ["node:crypto", "lodash"],
   middleware: {
     external: true,
     override: {

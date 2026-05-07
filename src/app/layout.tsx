@@ -1,19 +1,7 @@
 import type { Metadata } from 'next';
-import { Inter, Oswald } from 'next/font/google';
 import { ThemeProvider } from 'next-themes';
-import { AuthProvider } from '@/contexts/auth-context';
 import { ErrorInitializer } from '@/components/error-initializer';
 import './globals.css';
-
-const inter = Inter({
-  variable: '--font-inter',
-  subsets: ['latin'],
-});
-
-const oswald = Oswald({
-  variable: '--font-oswald',
-  subsets: ['latin'],
-});
 
 export const metadata: Metadata = {
   title: 'Super Bulls - Sports News',
@@ -24,6 +12,13 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * Root Layout — minimal server component.
+ *
+ * No Firebase, no next/font/google, no heavy SDK imports.
+ * Fonts are loaded via CSS @import in globals.css (client-side only).
+ * This guarantees the module evaluation will never crash on Cloudflare Workers.
+ */
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -31,9 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${inter.variable} ${oswald.variable} antialiased bg-background text-foreground`}
-      >
+      <body className="antialiased bg-background text-foreground">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -41,9 +34,7 @@ export default function RootLayout({
           disableTransitionOnChange={false}
         >
           <ErrorInitializer />
-          <AuthProvider>
-            {children}
-          </AuthProvider>
+          {children}
         </ThemeProvider>
       </body>
     </html>
