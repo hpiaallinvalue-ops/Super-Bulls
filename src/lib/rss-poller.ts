@@ -10,7 +10,7 @@
  *
  * Polling cadence:
  *   Normal:   every 5 minutes per channel
- *   Stale:    every 15 minutes (no new videos in last 2 polls)
+ *   Stale:    every 10 minutes (no new videos in last 8 polls)
  *   Backoff:  5s → 10s → 20s (on consecutive failures)
  *   Cooldown: 30 minutes (after 3 consecutive failures)
  */
@@ -42,11 +42,11 @@ interface PollResult {
 }
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
-const STALE_INTERVAL_MS = 15 * 60 * 1000;
+const STALE_INTERVAL_MS = 10 * 60 * 1000;
 const BACKOFF_STEPS = [5000, 10_000, 20_000];
 const COOLDOWN_MS = 30 * 60 * 1000;
 const MAX_KNOWN_IDS = 100;
-const STALE_THRESHOLD = 2;
+const STALE_THRESHOLD = 8;
 const MAX_BACKOFF_FAILURES = 3;
 
 const channelStates = new Map<string, ChannelState>();
