@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, ExternalLink, Eye, ThumbsUp, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft, ExternalLink, Eye, ThumbsUp, MessageSquare, ChevronDown, ChevronUp, Play, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -31,6 +31,8 @@ function formatDate(dateStr: string): string {
   });
 }
 
+type EmbedStatus = 'loading' | 'playing' | 'blocked' | 'error';
+
 function VideoPlayer({
   video,
   onBack,
@@ -39,8 +41,11 @@ function VideoPlayer({
   loadingStats,
 }: VideoPlayerProps) {
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [embedStatus, setEmbedStatus] = useState<EmbedStatus>('loading');
   const [iframeVisible, setIframeVisible] = useState(false);
   const playerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const embedCheckTimerRef = useRef<NodeJS.Timeout | null>(null);
   const categoryColor = CATEGORY_COLORS[video.category] || CATEGORY_COLORS.Other;
 
   // Lazy load iframe using IntersectionObserver
@@ -61,6 +66,67 @@ function VideoPlayer({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // Listen for YouTube embed error messages via postMessage
+  useEffect(() => {
+    if (!iframeVisible) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      // YouTube sends postMessage events when embed fails
+      if (event.origin !== 'https://www.youtube.com') return;
+
+      // YouTube embed error detection via postMessage data
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        // YouTube sends an event with event === 'error' when embedding fails
+        if (data?.event === 'error') {
+          setEmbedStatus('blocked');
+        }
+      } catch {
+        // Not JSON, ignore
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [iframeVisible]);
+
+  // Fallback: If embed is still 'loading' after 8 seconds, it's likely blocked
+  // YouTube blocked embeds show nothing or take a very long time
+  useEffect(() => {
+    if (!iframeVisible || embedStatus !== 'loading') return;
+
+    embedCheckTimerRef.current = setTimeout(() => {
+      // If still loading after 8s, assume blocked and show fallback
+      setEmbedStatus('blocked');
+    }, 8000);
+
+    return () => {
+      if (embedCheckTimerRef.current) clearTimeout(embedCheckTimerRef.current);
+    };
+  }, [iframeVisible, embedStatus]);
+
+  const handleIframeLoad = useCallback(() => {
+    // iframe loaded — clear the timer and mark as playing
+    if (embedCheckTimerRef.current) {
+      clearTimeout(embedCheckTimerRef.current);
+      embedCheckTimerRef.current = null;
+    }
+    setEmbedStatus('playing');
+  }, []);
+
+  const handleIframeError = useCallback(() => {
+    setEmbedStatus('error');
+  }, []);
+
+  const handleRetryEmbed = useCallback(() => {
+    setEmbedStatus('loading');
+    // Force reload the iframe by toggling visibility
+    setIframeVisible(false);
+    setTimeout(() => setIframeVisible(true), 100);
+  }, []);
+
+  const showFallback = embedStatus === 'blocked' || embedStatus === 'error';
 
   return (
     <div className="animate-slide-in-right pb-16">
@@ -88,14 +154,69 @@ function VideoPlayer({
           ref={playerRef}
           className="relative w-full aspect-video bg-black rounded-lg overflow-hidden"
         >
-          {iframeVisible ? (
+          {iframeVisible && !showFallback ? (
             <iframe
-              src={`https://www.youtube.com/embed/${video.videoId}?autoplay=1&rel=0`}
+              ref={iframeRef}
+              src={`https://www.youtube.com/embed/${video.videoId}?autoplay=1&rel=0&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
               title={video.title}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
               className="w-full h-full"
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
             />
+          ) : showFallback ? (
+            /* Embed blocked / error fallback */
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 to-black text-white relative">
+              {/* Background thumbnail with overlay */}
+              <img
+                src={video.thumbnailUrl}
+                alt={video.title}
+                className="absolute inset-0 w-full h-full object-cover opacity-30"
+              />
+              <div className="absolute inset-0 bg-black/50" />
+
+              {/* Content */}
+              <div className="relative z-10 flex flex-col items-center gap-4 px-6 text-center">
+                <div className="w-16 h-16 rounded-full bg-red-600/20 flex items-center justify-center">
+                  <AlertTriangle className="size-8 text-red-400" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-semibold">
+                    {embedStatus === 'blocked' ? 'Video unavailable on embed' : 'Failed to load video'}
+                  </h3>
+                  <p className="text-sm text-gray-400 max-w-sm">
+                    {embedStatus === 'blocked'
+                      ? 'This video has embedding restrictions from the content owner. Watch it directly on YouTube for the full experience.'
+                      : 'An error occurred while loading the video. Try watching on YouTube instead.'}
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <Button
+                    asChild
+                    className="bg-red-600 hover:bg-red-700 text-white font-medium"
+                  >
+                    <a
+                      href={`https://www.youtube.com/watch?v=${video.videoId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Play className="size-4 mr-2" />
+                      Watch on YouTube
+                    </a>
+                  </Button>
+                  {embedStatus === 'error' && (
+                    <Button
+                      variant="outline"
+                      className="text-white border-gray-600 hover:bg-gray-800"
+                      onClick={handleRetryEmbed}
+                    >
+                      Retry
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center bg-muted">
               <Skeleton className="w-full h-full" />
