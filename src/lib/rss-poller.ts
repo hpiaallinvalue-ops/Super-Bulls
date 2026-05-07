@@ -17,6 +17,7 @@
 
 import { fetchRSSFeed, parseRSSFeed } from '@/lib/youtube-rss';
 import { TRUSTED_CHANNELS, CHANNEL_CATEGORY_MAP } from '@/config/channels';
+import { classifyVideo } from '@/lib/category-rules';
 import type { Video } from '@/lib/mock-data';
 
 interface ChannelState {
@@ -149,7 +150,10 @@ export async function pollAllChannels(): Promise<PollResult[]> {
       const json = await fetchRSSFeed(channel.id);
       const videos = parseRSSFeed(json, channel.name, channel.id);
       recordSuccess(state);
-      for (const v of videos) v.category = CHANNEL_CATEGORY_MAP[v.channelId] || state.categoryName;
+      for (const v of videos) {
+        const classified = classifyVideo(v.title, v.description);
+        v.category = classified !== 'Other' ? classified : (CHANNEL_CATEGORY_MAP[v.channelId] || state.categoryName);
+      }
       const newVids = detectNewVideos(videos, state);
       results.push({ category: state.categoryName, newVideos: newVids, totalFetched: videos.length, channelName: channel.name, skipped: false });
     } catch {
@@ -177,7 +181,8 @@ export async function pollChannelsByIds(channelIds: string[]): Promise<Video[]> 
       const videos = parseRSSFeed(json, channel.name, channelId);
       recordSuccess(state);
       for (const v of videos) {
-        v.category = CHANNEL_CATEGORY_MAP[v.channelId] || state.categoryName;
+        const classified = classifyVideo(v.title, v.description);
+        v.category = classified !== 'Other' ? classified : (CHANNEL_CATEGORY_MAP[v.channelId] || state.categoryName);
         state.knownIds.add(v.videoId);
       }
       allVideos.push(...videos);
