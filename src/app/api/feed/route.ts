@@ -1,103 +1,195 @@
 /**
- * Feed API Route — Server-side RSS aggregation with caching
+ * Feed API Route — Smart RSS Aggregation with Change Detection
  *
- * Fetches RSS feeds from all configured YouTube channels in parallel,
- * classifies each video by sport category, and returns the merged feed.
+ * Strategy:
+ *   - On first request: force-poll all channels (initial load)
+ *   - On subsequent requests: use smart poller (only polls channels
+ *     that are due, respecting backoff/cooldown/staleness)
+ *   - All videos served from an in-memory buffer that accumulates
+ *     new content across poll cycles
+ *   - Cache TTL: 2 minutes (fast reads between poll cycles)
  *
- * Caching: In-memory, 5-minute TTL per category.
- * On Cloudflare Workers this lives in the global scope so it survives
- * across requests within the same isolate.
+ * No AI involved — purely deterministic programs:
+ *   - Change detection via video-ID set comparison
+ *   - Category assigned from channel config (not keyword guessing)
+ *   - Staggered polling to avoid hammering YouTube
  */
 
 import { NextResponse } from 'next/server';
-import { fetchRSSFeed, parseRSSFeed } from '@/lib/youtube-rss';
-import { classifyVideo } from '@/lib/category-rules';
-import { TRUSTED_CHANNELS } from '@/config/channels';
+import { pollAllChannels, pollChannelsByIds, getPollerDiagnostics } from '@/lib/rss-poller';
+import { TRUSTED_CHANNELS, CHANNEL_CATEGORY_MAP } from '@/config/channels';
+import { parseRSSFeed } from '@/lib/youtube-rss';
+import { fetchRSSFeed } from '@/lib/youtube-rss';
 import { logError, extractErrorInfo } from '@/lib/error-logger';
 import type { Video } from '@/lib/mock-data';
 
-// ── In-memory Cache ───────────────────────────────────────────────────────
+// ── In-Memory Video Buffer ────────────────────────────────────────────────
+// Accumulates all discovered videos. Survives across CF Worker isolates.
 
-interface CacheEntry {
-  videos: Video[];
-  timestamp: number;
+const videoBuffer = new Map<string, Video>(); // videoId → Video
+const bufferByCategory = new Map<string, Video[]>(); // category → Video[]
+
+let bufferInitialized = false;
+let bufferLastUpdated = 0;
+
+// ── Buffer Helpers ─────────────────────────────────────────────────────────
+
+function addToBuffer(videos: Video[]): void {
+  for (const v of videos) {
+    videoBuffer.set(v.videoId, v);
+  }
+  rebuildCategoryIndex();
+  bufferLastUpdated = Date.now();
 }
 
-const feedCache = new Map<string, CacheEntry>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-// ── GET /api/feed?category=All&sort=latest ───────────────────────────────
-
-export async function GET(request: Request) {
-  try {
-  const { searchParams } = new URL(request.url);
-  const category = searchParams.get('category') || 'All';
-
-  // Check cache
-  const cacheKey = `feed_${category}`;
-  const cached = feedCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return NextResponse.json({ videos: cached.videos, source: 'rss-cached' });
+function rebuildCategoryIndex(): void {
+  bufferByCategory.clear();
+  for (const video of videoBuffer.values()) {
+    const cat = video.category || 'Other';
+    if (!bufferByCategory.has(cat)) {
+      bufferByCategory.set(cat, []);
+    }
+    bufferByCategory.get(cat)!.push(video);
   }
+}
 
-  // Fetch RSS from ALL channels in parallel (no quota limit!)
+function getFromBuffer(category: string): Video[] {
+  if (category === 'All') {
+    return Array.from(videoBuffer.values());
+  }
+  return bufferByCategory.get(category) || [];
+}
+
+// ── Initial Load (first request) ──────────────────────────────────────────
+
+async function initializeBuffer(): Promise<void> {
+  if (bufferInitialized) return;
+  bufferInitialized = true;
+
+  // Force-poll ALL channels on first load (ignore backoff)
+  const channelIds = TRUSTED_CHANNELS.map(c => c.id);
+
   const settled = await Promise.allSettled(
-    TRUSTED_CHANNELS.map(async (channel) => {
-      const xml = await fetchRSSFeed(channel.id);
-      const videos = parseRSSFeed(xml, channel.name, channel.id);
-      // Classify each video by sport
-      for (const v of videos) {
-        v.category = classifyVideo(v.title, v.description);
+    channelIds.map(async (channelId) => {
+      const channel = TRUSTED_CHANNELS.find(c => c.id === channelId)!;
+      try {
+        const xml = await fetchRSSFeed(channelId);
+        const videos = parseRSSFeed(xml, channel.name, channelId);
+        // Assign category deterministically from channel config
+        for (const v of videos) {
+          v.category = CHANNEL_CATEGORY_MAP[v.channelId] || channel.category;
+        }
+        return videos;
+      } catch {
+        return [] as Video[];
       }
-      return videos;
     })
   );
 
-  // Log any channel failures
-  for (let i = 0; i < settled.length; i++) {
-    if (settled[i].status === 'rejected') {
-      const channel = TRUSTED_CHANNELS[i];
-      const { message, stack } = extractErrorInfo(settled[i].reason);
-      logError({
-        source: 'api',
-        route: `/api/feed?category=${category}`,
-        message: `RSS fetch failed for ${channel.name}: ${message}`,
-        stack,
-        extra: { channelId: channel.id },
+  for (const result of settled) {
+    if (result.status === 'fulfilled' && result.value.length > 0) {
+      addToBuffer(result.value);
+    }
+  }
+}
+
+// ── Cache Layer (2-minute TTL for fast reads) ─────────────────────────────
+
+const responseCache = new Map<string, { data: object; timestamp: number }>();
+const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
+
+function getCachedResponse(key: string): object | null {
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL) {
+    responseCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedResponse(key: string, data: object): void {
+  // Limit cache size
+  if (responseCache.size > 50) {
+    const oldest = Array.from(responseCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (let i = 0; i < 10; i++) {
+      responseCache.delete(oldest[i][0]);
+    }
+  }
+  responseCache.set(key, { data, timestamp: Date.now() });
+}
+
+// ── GET /api/feed?category=All&sort=latest&diagnostics=false ──────────────
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const category = searchParams.get('category') || 'All';
+    const sort = searchParams.get('sort') || 'latest';
+    const wantDiagnostics = searchParams.get('diagnostics') === 'true';
+
+    // Diagnostics endpoint (no side effects)
+    if (wantDiagnostics) {
+      return NextResponse.json({
+        poller: getPollerDiagnostics(),
+        buffer: {
+          totalVideos: videoBuffer.size,
+          categories: Object.fromEntries(
+            Array.from(bufferByCategory.entries()).map(([k, v]) => [k, v.length])
+          ),
+          lastUpdated: bufferLastUpdated,
+          initialized: bufferInitialized,
+        },
+        cache: {
+          entries: responseCache.size,
+          ttl: CACHE_TTL,
+        },
       });
     }
-  }
 
-  // Merge successful results
-  const allVideos: Video[] = [];
-  for (let i = 0; i < settled.length; i++) {
-    const result = settled[i];
-    if (result.status === 'fulfilled') {
-      allVideos.push(...result.value);
+    // Ensure buffer is populated on first request
+    if (!bufferInitialized) {
+      await initializeBuffer();
+    } else {
+      // Run smart poll — only fetches channels that are due
+      const pollResults = await pollAllChannels();
+      for (const result of pollResults) {
+        if (result.newVideos.length > 0) {
+          addToBuffer(result.newVideos);
+        }
+      }
     }
-    // Silently skip failed channels — the others still work
-  }
 
-  // Filter by category if requested
-  const filtered = category === 'All'
-    ? allVideos
-    : allVideos.filter(v => v.category === category);
+    // Check response cache
+    const cacheKey = `${category}_${sort}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return NextResponse.json({ ...cached as object, source: 'cached' });
+    }
 
-  // Cache the result
-  feedCache.set(cacheKey, { videos: filtered, timestamp: Date.now() });
+    // Get videos from buffer
+    let videos = getFromBuffer(category);
 
-  // Also cache the "All" variant if this was a category-specific request
-  // so switching back to "All" is instant
-  if (category !== 'All' && !feedCache.has('feed_All')) {
-    feedCache.set('feed_All', { videos: allVideos, timestamp: Date.now() });
-  }
+    // Sort
+    if (sort === 'trending') {
+      videos = [...videos].sort((a, b) => b.viewCount - a.viewCount);
+    } else {
+      videos = [...videos].sort(
+        (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+      );
+    }
 
-  return NextResponse.json({
-    videos: filtered,
-    source: 'rss',
-    channels: TRUSTED_CHANNELS.length,
-    fetchedFrom: settled.filter(r => r.status === 'fulfilled').length,
-  });
+    const responseData = {
+      videos,
+      source: bufferInitialized ? 'rss' : 'initial-load',
+      totalInBuffer: videoBuffer.size,
+      channels: TRUSTED_CHANNELS.length,
+    };
+
+    setCachedResponse(cacheKey, responseData);
+
+    return NextResponse.json(responseData);
 
   } catch (err) {
     const { message, stack, digest } = extractErrorInfo(err);
