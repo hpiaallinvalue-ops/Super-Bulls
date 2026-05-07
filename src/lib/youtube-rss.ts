@@ -1,79 +1,70 @@
 /**
  * YouTube RSS Feed Fetcher & Parser
  *
- * YouTube provides free RSS feeds for every channel:
- *   https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}
+ * Fetches YouTube channel uploads via the rss2json.com proxy service.
+ * This is necessary because YouTube's direct RSS endpoint is blocked
+ * or rate-limited from many server environments (including Cloudflare Workers).
  *
- * Each feed returns the ~15 most recent uploads with:
- *   - Title, description, thumbnail
- *   - Published date
- *   - View count (from <media:statistics>)
- *   - Channel info
+ * rss2json.com free tier: 10,000 requests/day, 10 req/s.
+ * With 11 channels every 5 min = ~3,168 requests/day. Well within limits.
  *
- * No API key needed. No quota. Completely free.
+ * Returns JSON directly — no XML parsing needed.
  */
 
 import type { Video } from './mock-data';
 
-const RSS_BASE_URL = 'https://www.youtube.com/feeds/videos.xml';
+const RSS2JSON_BASE = 'https://api.rss2json.com/v1/api.json';
+const RSS_PROXY_URL = 'https://www.youtube.com/feeds/videos.xml';
 
-// ── Fetch RSS Feed ─────────────────────────────────────────────────────────
+// ── Fetch RSS Feed via Proxy ───────────────────────────────────────────────
 
 export async function fetchRSSFeed(channelId: string): Promise<string> {
-  const url = `${RSS_BASE_URL}?channel_id=${channelId}`;
-  const response = await fetch(url, {
+  const rssUrl = `${RSS_PROXY_URL}?channel_id=${channelId}`;
+  const apiUrl = `${RSS2JSON_BASE}?rss_url=${encodeURIComponent(rssUrl)}`;
+
+  const response = await fetch(apiUrl, {
     headers: {
-      'Accept': 'application/xml, text/xml',
+      'Accept': 'application/json',
       'User-Agent': 'SuperBulls/1.0',
     },
-    signal: AbortSignal.timeout(10_000), // 10s timeout per channel
+    signal: AbortSignal.timeout(15_000), // 15s timeout
   });
 
   if (!response.ok) {
-    throw new Error(`RSS fetch failed for channel ${channelId}: ${response.status}`);
+    throw new Error(`RSS proxy failed for channel ${channelId}: ${response.status}`);
   }
 
   return response.text();
 }
 
-// ── Parse RSS XML → Video[] ───────────────────────────────────────────────
+// ── Parse JSON Response → Video[] ─────────────────────────────────────────
 
 export function parseRSSFeed(
-  xml: string,
+  json: string,
   channelName: string,
   channelId: string
 ): Video[] {
   const videos: Video[] = [];
 
-  // Split by <entry> tags — skip everything before the first <entry>
-  const parts = xml.split('<entry>');
-  if (parts.length < 2) return videos; // No entries found
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return videos;
+  }
 
-  for (let i = 1; i < parts.length; i++) {
-    const endIdx = parts[i].indexOf('</entry>');
-    if (endIdx === -1) continue;
-    const block = parts[i].substring(0, endIdx);
+  if (data.status !== 'ok' || !Array.isArray(data.items)) {
+    return videos;
+  }
 
-    const videoId = extractTag(block, '<yt:videoId>');
+  for (const item of data.items as Array<Record<string, string>>) {
+    const videoId = extractVideoId(item.link || item.guid || '');
     if (!videoId) continue;
 
-    const title = decodeHTMLEntities(
-      extractTag(block, '<title>') || extractTag(block, '<media:title>') || 'Untitled'
-    );
-    const published = extractTag(block, '<published>') || new Date().toISOString();
-
-    // Description may be in <media:description> with CDATA
-    const rawDesc = extractTag(block, '<media:description>') || '';
-    const description = cleanDescription(rawDesc);
-
-    // Thumbnail — prefer high quality
-    const thumbMatch = block.match(/<media:thumbnail\s[^>]*url="([^"]+)"/);
-    const thumbnailUrl = thumbMatch?.[1]
-      || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-
-    // View count from <media:statistics views="...">
-    const viewsMatch = block.match(/<media:statistics\s[^>]*views="(\d+)"/);
-    const viewCount = viewsMatch ? parseInt(viewsMatch[1], 10) : 0;
+    const title = item.title || 'Untitled';
+    const published = item.pubDate || new Date().toISOString();
+    const description = cleanDescription(item.description || item.content || '');
+    const thumbnailUrl = item.thumbnail || item.enclosure?.link || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
     videos.push({
       videoId,
@@ -83,7 +74,7 @@ export function parseRSSFeed(
       thumbnailUrl,
       publishedAt: published,
       description,
-      viewCount,
+      viewCount: 0,
       likeCount: 0,
       commentCount: 0,
       duration: '',
@@ -94,37 +85,20 @@ export function parseRSSFeed(
   return videos;
 }
 
-// ── XML Parsing Helpers ───────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-function extractTag(xml: string, tag: string): string {
-  const startIdx = xml.indexOf(tag);
-  if (startIdx === -1) return '';
-  const valueStart = startIdx + tag.length;
-  const endIdx = xml.indexOf('</', valueStart);
-  if (endIdx === -1) return '';
-  return xml.substring(valueStart, endIdx).trim();
+function extractVideoId(url: string): string {
+  // Match youtube.com/watch?v=VIDEO_ID or youtu.be/VIDEO_ID
+  const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : '';
 }
 
 function cleanDescription(raw: string): string {
-  // Strip CDATA wrappers
-  let cleaned = raw
-    .replace(/<!\[CDATA\[/g, '')
-    .replace(/\]\]>/g, '')
-    .trim();
-  // Strip basic HTML tags but keep text
-  cleaned = cleaned.replace(/<br\s*\/?>/gi, '\n');
+  if (!raw) return '';
+  // Strip HTML tags but keep text
+  let cleaned = raw.replace(/<br\s*\/?>/gi, '\n');
   cleaned = cleaned.replace(/<[^>]+>/g, '');
-  // Collapse whitespace
+  cleaned = cleaned.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
   return cleaned.trim();
-}
-
-function decodeHTMLEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'");
 }
