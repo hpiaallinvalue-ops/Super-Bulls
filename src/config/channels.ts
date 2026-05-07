@@ -1,83 +1,73 @@
 /**
  * Channel Configuration — YouTube RSS Sources
  *
- * All channels are fetched via their free RSS feed. No API key needed.
- * Add any YouTube channel ID here and it'll automatically appear in the feed.
+ * DESIGN PRINCIPLES:
+ *   1. Category Specialization — every channel specializes in ONE sport.
+ *      No general/multi-sport channels. Each category pulls from its own
+ *      dedicated sources, so classification is deterministic, not heuristic.
+ *   2. Free & Reputable — all sources use free YouTube RSS feeds.
+ *      Channels are official league/team bodies or credible networks.
+ *   3. English Only — content must be primarily in English.
  *
- * To find a channel ID:
+ * RSS URL format: https://www.youtube.com/feeds/videos.xml?channel_id={ID}
+ * No API key needed. No quota. Completely free.
+ *
+ * To add a new channel:
  *   1. Go to the YouTube channel page
  *   2. The URL contains the ID: youtube.com/channel/UC...
- *   3. Or check page source for "channelId"
+ *   3. Add it under the correct category below
  */
 
 export interface ChannelInfo {
   id: string;
   name: string;
+  /** Must match a key in CATEGORY_RULES (categories.ts) or 'other' */
   category: string;
-  /** Higher priority channels appear first in feed */
+  /** Lower = fetched first; used as stable sort key */
   priority: number;
 }
 
-// ── RSS Channels — Free, Unlimited, No API Key ─────────────────────────────
+// ── Category-Specialized RSS Channels ─────────────────────────────────────
 
 export const TRUSTED_CHANNELS: ChannelInfo[] = [
-  // ══════════════════════════════════════════════════════════════════════════
-  // Major Sports Networks (General / Multi-Sport)
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCiiljEMOGL7SUhPCrCO-MOg', name: 'ESPN',              category: 'general',    priority: 1 },
-  { id: 'UCDjFJ-YdsJ3VT2zBOPOdqeA', name: 'Sky Sports',        category: 'football',   priority: 2 },
-  { id: 'UC8-ZWfFvkRnN2Lfl8fFbK0A', name: 'Bleacher Report',   category: 'general',    priority: 3 },
-  { id: 'UCqZQJ4D8bqG5wjNEiH7kyCQ', name: 'Fox Sports',        category: 'general',    priority: 6 },
-  { id: 'UCFtK9FVk8cXihz9MW4SVy7w', name: 'The Athletic',      category: 'general',    priority: 9 },
-  { id: 'UCJUCcJUeh0Cz2xyKwkw5Q1w', name: 'beIN SPORTS',       category: 'general',    priority: 10 },
-
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // Football / Soccer
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UC6c1z7bA__85CIWZ_jpCK-Q', name: 'ESPN FC',                  category: 'football', priority: 11 },
-  { id: 'UCG5qGWdu8nIRZqJ_GgDwQ-w', name: 'Premier League',            category: 'football', priority: 12 },
-  { id: 'UCTv-XvfzLX3i4IGWAm4sbmA', name: 'LaLiga',                    category: 'football', priority: 13 },
-  { id: 'UCs-dSOHbA_J4p76uYIUczWg', name: 'CBS Sports Golazo',         category: 'football', priority: 7 },
+  // ═══════════════════════════════════════════════════════════════════════
+  { id: 'UCDjFJ-YdsJ3VT2zBOPOdqeA', name: 'Sky Sports Football',     category: 'Football',  priority: 1 },
+  { id: 'UC6c1z7bA__85CIWZ_jpCK-Q', name: 'ESPN FC',                category: 'Football',  priority: 2 },
+  { id: 'UCG5qGWdu8nIRZqJ_GgDwQ-w', name: 'Premier League',          category: 'Football',  priority: 3 },
+  { id: 'UCTv-XvfzLX3i4IGWAm4sbmA', name: 'LaLiga',                  category: 'Football',  priority: 4 },
+  { id: 'UCs-dSOHbA_J4p76uYIUczWg', name: 'CBS Sports Golazo',       category: 'Football',  priority: 5 },
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // Basketball
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCWJ2lWNubArHWmf3FIHbfcQ', name: 'NBA',               category: 'basketball', priority: 4 },
+  // ═══════════════════════════════════════════════════════════════════════
+  { id: 'UCWJ2lWNubArHWmf3FIHbfcQ', name: 'NBA',                     category: 'Basketball', priority: 1 },
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // Cricket
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCAC3c_TJEj-9zVny-bSSIiA', name: 'BCCI',                    category: 'cricket',    priority: 14 },
-  { id: 'UCt2JXOLNxqry7B_4rRZME3Q', name: 'ICC',                     category: 'cricket',    priority: 15 },
-  { id: 'UC2naOExy27J5Qz3SO-w6xkQ', name: 'Cricket Australia',        category: 'cricket',    priority: 16 },
-  { id: 'UCOkT6dccQ1vsnMFK1xJanmA', name: 'Fox Cricket',              category: 'cricket',    priority: 17 },
+  // ═══════════════════════════════════════════════════════════════════════
+  { id: 'UCAC3c_TJEj-9zVny-bSSIiA', name: 'BCCI',                    category: 'Cricket',    priority: 1 },
+  { id: 'UCt2JXOLNxqry7B_4rRZME3Q', name: 'ICC',                     category: 'Cricket',    priority: 2 },
+  { id: 'UC2naOExy27J5Qz3SO-w6xkQ', name: 'Cricket Australia',        category: 'Cricket',    priority: 3 },
+  { id: 'UCOkT6dccQ1vsnMFK1xJanmA', name: 'Fox Cricket',              category: 'Cricket',    priority: 4 },
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // MMA / Combat Sports
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCvgfXK4aHYobs0s2FhW6pNg', name: 'UFC',               category: 'mma',        priority: 5 },
-  { id: 'UCAYlEoYwWfkF9nx3GekMwiw', name: 'DAZN Boxing',       category: 'mma',        priority: 8 },
+  // ═══════════════════════════════════════════════════════════════════════
+  { id: 'UCvgfXK4aHYobs0s2FhW6pNg', name: 'UFC',                     category: 'MMA',        priority: 1 },
+  { id: 'UCAYlEoYwWfkF9nx3GekMwiw', name: 'DAZN Boxing',             category: 'MMA',        priority: 2 },
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // Tennis
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCbcxFkd6B9xUU54InHv4Tig', name: 'Tennis TV',               category: 'tennis',     priority: 18 },
-  { id: 'UCDitdIjOjS9Myza9I21IqzQ', name: 'Tennis Channel',           category: 'tennis',     priority: 19 },
+  // ═══════════════════════════════════════════════════════════════════════
+  { id: 'UCbcxFkd6B9xUU54InHv4Tig', name: 'Tennis TV',               category: 'Tennis',     priority: 1 },
+  { id: 'UCDitdIjOjS9Myza9I21IqzQ', name: 'Tennis Channel',           category: 'Tennis',     priority: 2 },
 
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // Baseball
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCoLrcjPV5PbUrUyXq5mjc_A', name: 'MLB',                     category: 'baseball',   priority: 20 },
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // American Football
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCDVYQ4Zhbm3S2dlz7P1GBDg', name: 'NFL',                     category: 'football',   priority: 21 },
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Motorsport
-  // ══════════════════════════════════════════════════════════════════════════
-  { id: 'UCB_qr75-ydFVKSF9Dmo6izg', name: 'Formula 1',               category: 'other',      priority: 22 },
+  // ═══════════════════════════════════════════════════════════════════════
+  { id: 'UCoLrcjPV5PbUrUyXq5mjc_A', name: 'MLB',                     category: 'Baseball',   priority: 1 },
 ];
 
 // ── Legacy: Kept for backward compat ───────────────────────────────────────
@@ -88,29 +78,27 @@ export const WHITELISTED_CHANNELS: string[] = [
 ];
 
 export const CHANNEL_CATEGORY_MAP: Record<string, string> = {
-  'UCiiljEMOGL7SUhPCrCO-MOg': 'general',
-  'UCDjFJ-YdsJ3VT2zBOPOdqeA': 'football',
-  'UC8-ZWfFvkRnN2Lfl8fFbK0A': 'general',
-  'UCWJ2lWNubArHWmf3FIHbfcQ': 'basketball',
-  'UCvgfXK4aHYobs0s2FhW6pNg': 'mma',
-  'UCqZQJ4D8bqG5wjNEiH7kyCQ': 'general',
-  'UCs-dSOHbA_J4p76uYIUczWg': 'football',
-  'UCAYlEoYwWfkF9nx3GekMwiw': 'mma',
-  'UCFtK9FVk8cXihz9MW4SVy7w': 'general',
-  // New channels
-  'UCJUCcJUeh0Cz2xyKwkw5Q1w': 'general',
-  'UC6c1z7bA__85CIWZ_jpCK-Q': 'football',
-  'UCG5qGWdu8nIRZqJ_GgDwQ-w': 'football',
-  'UCTv-XvfzLX3i4IGWAm4sbmA': 'football',
-  'UCAC3c_TJEj-9zVny-bSSIiA': 'cricket',
-  'UCt2JXOLNxqry7B_4rRZME3Q': 'cricket',
-  'UC2naOExy27J5Qz3SO-w6xkQ': 'cricket',
-  'UCOkT6dccQ1vsnMFK1xJanmA': 'cricket',
-  'UCbcxFkd6B9xUU54InHv4Tig': 'tennis',
-  'UCDitdIjOjS9Myza9I21IqzQ': 'tennis',
-  'UCoLrcjPV5PbUrUyXq5mjc_A': 'baseball',
-  'UCDVYQ4Zhbm3S2dlz7P1GBDg': 'football',
-  'UCB_qr75-ydFVKSF9Dmo6izg': 'other',
+  // Football
+  'UCDjFJ-YdsJ3VT2zBOPOdqeA': 'Football',
+  'UC6c1z7bA__85CIWZ_jpCK-Q': 'Football',
+  'UCG5qGWdu8nIRZqJ_GgDwQ-w': 'Football',
+  'UCTv-XvfzLX3i4IGWAm4sbmA': 'Football',
+  'UCs-dSOHbA_J4p76uYIUczWg': 'Football',
+  // Basketball
+  'UCWJ2lWNubArHWmf3FIHbfcQ': 'Basketball',
+  // Cricket
+  'UCAC3c_TJEj-9zVny-bSSIiA': 'Cricket',
+  'UCt2JXOLNxqry7B_4rRZME3Q': 'Cricket',
+  'UC2naOExy27J5Qz3SO-w6xkQ': 'Cricket',
+  'UCOkT6dccQ1vsnMFK1xJanmA': 'Cricket',
+  // MMA
+  'UCvgfXK4aHYobs0s2FhW6pNg': 'MMA',
+  'UCAYlEoYwWfkF9nx3GekMwiw': 'MMA',
+  // Tennis
+  'UCbcxFkd6B9xUU54InHv4Tig': 'Tennis',
+  'UCDitdIjOjS9Myza9I21IqzQ': 'Tennis',
+  // Baseball
+  'UCoLrcjPV5PbUrUyXq5mjc_A': 'Baseball',
 };
 
 export const TRUSTED_CHANNEL_IDS = new Set(TRUSTED_CHANNELS.map(c => c.id));
