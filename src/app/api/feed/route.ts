@@ -1,36 +1,29 @@
 /**
- * Feed API Route — Smart RSS Aggregation with Change Detection
+ * Feed API Route — Non-Blocking RSS with Mock Data Fallback
  *
- * Strategy:
- *   - On first request: force-poll all channels (initial load)
- *   - On subsequent requests: use smart poller (only polls channels
- *     that are due, respecting backoff/cooldown/staleness)
- *   - All videos served from an in-memory buffer that accumulates
- *     new content across poll cycles
- *   - Cache TTL: 2 minutes (fast reads between poll cycles)
- *
- * No AI involved — purely deterministic programs:
- *   - Change detection via video-ID set comparison
- *   - Category assigned from channel config (not keyword guessing)
- *   - Staggered polling to avoid hammering YouTube
+ * Architecture:
+ *   - First request: fire-and-forget poll all channels, serve mock data immediately
+ *   - Subsequent requests: fire-and-forget smart poll, serve from buffer
+ *   - Buffer accumulates real RSS data over time (fills in progressively)
+ *   - Mock data is always served when buffer has no videos for a category
+ *   - Response is ALWAYS fast — never blocks on RSS fetches
  */
 
 import { NextResponse } from 'next/server';
-import { pollAllChannels, pollChannelsByIds, getPollerDiagnostics } from '@/lib/rss-poller';
+import { pollAllChannels, getPollerDiagnostics } from '@/lib/rss-poller';
 import { TRUSTED_CHANNELS, CHANNEL_CATEGORY_MAP } from '@/config/channels';
-import { parseRSSFeed } from '@/lib/youtube-rss';
-import { fetchRSSFeed } from '@/lib/youtube-rss';
+import { parseRSSFeed, fetchRSSFeed } from '@/lib/youtube-rss';
 import { logError, extractErrorInfo } from '@/lib/error-logger';
 import type { Video } from '@/lib/mock-data';
 
 // ── In-Memory Video Buffer ────────────────────────────────────────────────
-// Accumulates all discovered videos. Survives across CF Worker isolates.
 
-const videoBuffer = new Map<string, Video>(); // videoId → Video
-const bufferByCategory = new Map<string, Video[]>(); // category → Video[]
-
+const videoBuffer = new Map<string, Video>();
+const bufferByCategory = new Map<string, Video[]>();
 let bufferInitialized = false;
 let bufferLastUpdated = 0;
+let mockDataCache: Video[] | null = null;
+let pollInProgress = false;
 
 // ── Buffer Helpers ─────────────────────────────────────────────────────────
 
@@ -46,57 +39,100 @@ function rebuildCategoryIndex(): void {
   bufferByCategory.clear();
   for (const video of videoBuffer.values()) {
     const cat = video.category || 'Other';
-    if (!bufferByCategory.has(cat)) {
-      bufferByCategory.set(cat, []);
-    }
+    if (!bufferByCategory.has(cat)) bufferByCategory.set(cat, []);
     bufferByCategory.get(cat)!.push(video);
   }
 }
 
 function getFromBuffer(category: string): Video[] {
-  if (category === 'All') {
-    return Array.from(videoBuffer.values());
-  }
+  if (category === 'All') return Array.from(videoBuffer.values());
   return bufferByCategory.get(category) || [];
 }
 
-// ── Initial Load (first request) ──────────────────────────────────────────
+async function getMockData(): Promise<Video[]> {
+  if (!mockDataCache) {
+    const { MOCK_VIDEOS } = await import('@/lib/mock-data');
+    mockDataCache = MOCK_VIDEOS;
+  }
+  return mockDataCache;
+}
 
-async function initializeBuffer(): Promise<void> {
+/**
+ * Get videos for a category.
+ * Merges RSS buffer with mock data — RSS first, mock fills gaps.
+ */
+async function getVideosForCategory(category: string): Promise<Video[]> {
+  const rssVideos = getFromBuffer(category);
+
+  if (category === 'All' && rssVideos.length > 0) {
+    return rssVideos;
+  }
+
+  // For specific categories, check if RSS has content
+  if (rssVideos.length > 0) return rssVideos;
+
+  // Fallback to mock data
+  const mock = await getMockData();
+  if (category === 'All') return mock;
+  return mock.filter(v => v.category === category);
+}
+
+// ── Background Poll (non-blocking) ─────────────────────────────────────────
+
+function triggerBackgroundPoll(): void {
+  if (pollInProgress) return;
+  pollInProgress = true;
+
+  pollAllChannels()
+    .then(results => {
+      for (const result of results) {
+        if (result.newVideos.length > 0) {
+          addToBuffer(result.newVideos);
+        }
+      }
+    })
+    .catch(() => { /* silent — buffer may still have content */ })
+    .finally(() => {
+      pollInProgress = false;
+      bufferInitialized = true;
+    });
+}
+
+async function triggerInitialPoll(): Promise<void> {
   if (bufferInitialized) return;
   bufferInitialized = true;
 
-  // Force-poll ALL channels on first load (ignore backoff)
-  const channelIds = TRUSTED_CHANNELS.map(c => c.id);
-
-  const settled = await Promise.allSettled(
-    channelIds.map(async (channelId) => {
-      const channel = TRUSTED_CHANNELS.find(c => c.id === channelId)!;
-      try {
-        const xml = await fetchRSSFeed(channelId);
-        const videos = parseRSSFeed(xml, channel.name, channelId);
-        // Assign category deterministically from channel config
-        for (const v of videos) {
-          v.category = CHANNEL_CATEGORY_MAP[v.channelId] || channel.category;
+  try {
+    const channelIds = TRUSTED_CHANNELS.map(c => c.id);
+    const settled = await Promise.allSettled(
+      channelIds.map(async (channelId) => {
+        const channel = TRUSTED_CHANNELS.find(c => c.id === channelId)!;
+        try {
+          const xml = await fetchRSSFeed(channelId);
+          const videos = parseRSSFeed(xml, channel.name, channelId);
+          for (const v of videos) {
+            v.category = CHANNEL_CATEGORY_MAP[v.channelId] || channel.category;
+          }
+          return videos;
+        } catch {
+          return [] as Video[];
         }
-        return videos;
-      } catch {
-        return [] as Video[];
+      })
+    );
+    for (const result of settled) {
+      if (result.status === 'fulfilled' && result.value.length > 0) {
+        addToBuffer(result.value);
       }
-    })
-  );
-
-  for (const result of settled) {
-    if (result.status === 'fulfilled' && result.value.length > 0) {
-      addToBuffer(result.value);
     }
+  } catch {
+    /* silent — mock data will be served */
   }
 }
 
-// ── Cache Layer (2-minute TTL for fast reads) ─────────────────────────────
+// ── Response Cache (2-minute TTL) ─────────────────────────────────────────
 
 const responseCache = new Map<string, { data: object; timestamp: number }>();
-const CACHE_TTL = 2 * 60 * 1000; // 2 minutes
+const CACHE_TTL = 2 * 60 * 1000;
 
 function getCachedResponse(key: string): object | null {
   const entry = responseCache.get(key);
@@ -109,18 +145,15 @@ function getCachedResponse(key: string): object | null {
 }
 
 function setCachedResponse(key: string, data: object): void {
-  // Limit cache size
   if (responseCache.size > 50) {
     const oldest = Array.from(responseCache.entries())
       .sort((a, b) => a[1].timestamp - b[1].timestamp);
-    for (let i = 0; i < 10; i++) {
-      responseCache.delete(oldest[i][0]);
-    }
+    for (let i = 0; i < 10; i++) responseCache.delete(oldest[i][0]);
   }
   responseCache.set(key, { data, timestamp: Date.now() });
 }
 
-// ── GET /api/feed?category=All&sort=latest&diagnostics=false ──────────────
+// ── GET /api/feed ─────────────────────────────────────────────────────────
 
 export async function GET(request: Request) {
   try {
@@ -129,7 +162,6 @@ export async function GET(request: Request) {
     const sort = searchParams.get('sort') || 'latest';
     const wantDiagnostics = searchParams.get('diagnostics') === 'true';
 
-    // Diagnostics endpoint (no side effects)
     if (wantDiagnostics) {
       return NextResponse.json({
         poller: getPollerDiagnostics(),
@@ -140,36 +172,30 @@ export async function GET(request: Request) {
           ),
           lastUpdated: bufferLastUpdated,
           initialized: bufferInitialized,
+          pollInProgress,
         },
-        cache: {
-          entries: responseCache.size,
-          ttl: CACHE_TTL,
-        },
+        cache: { entries: responseCache.size, ttl: CACHE_TTL },
       });
     }
 
-    // Ensure buffer is populated on first request
+    // Fire-and-forget: initial poll on first request (non-blocking)
     if (!bufferInitialized) {
-      await initializeBuffer();
-    } else {
-      // Run smart poll — only fetches channels that are due
-      const pollResults = await pollAllChannels();
-      for (const result of pollResults) {
-        if (result.newVideos.length > 0) {
-          addToBuffer(result.newVideos);
-        }
-      }
+      // Serve mock data immediately while poll runs in background
+      triggerInitialPoll();
+    } else if (!pollInProgress) {
+      // Subsequent requests: trigger smart poll in background
+      triggerBackgroundPoll();
     }
 
     // Check response cache
     const cacheKey = `${category}_${sort}`;
     const cached = getCachedResponse(cacheKey);
     if (cached) {
-      return NextResponse.json({ ...cached as object, source: 'cached' });
+      return NextResponse.json({ ...(cached as Record<string, unknown>), source: 'cached' });
     }
 
-    // Get videos from buffer
-    let videos = getFromBuffer(category);
+    // Always serve from buffer (with mock fallback) — never wait for poll
+    let videos = await getVideosForCategory(category);
 
     // Sort
     if (sort === 'trending') {
@@ -180,26 +206,20 @@ export async function GET(request: Request) {
       );
     }
 
+    const isUsingMock = videoBuffer.size === 0;
     const responseData = {
       videos,
-      source: bufferInitialized ? 'rss' : 'initial-load',
+      source: isUsingMock ? 'mock' : 'rss',
       totalInBuffer: videoBuffer.size,
       channels: TRUSTED_CHANNELS.length,
     };
 
     setCachedResponse(cacheKey, responseData);
-
     return NextResponse.json(responseData);
 
   } catch (err) {
     const { message, stack, digest } = extractErrorInfo(err);
-    logError({
-      source: 'api',
-      route: `/api/feed`,
-      message,
-      stack,
-      digest,
-    });
+    logError({ source: 'api', route: '/api/feed', message, stack, digest });
     return NextResponse.json(
       { error: 'Feed temporarily unavailable', logged: true },
       { status: 500 }
