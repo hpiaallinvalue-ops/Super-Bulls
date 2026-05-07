@@ -11,7 +11,13 @@ import {
   serverTimestamp,
   type Timestamp,
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { getDb } from '@/lib/firebase';
+
+function getFirestoreDb() {
+  const db = getDb();
+  if (!db) throw new Error('Firestore not initialized. Ensure Firebase has been bootstrapped on the client.');
+  return db;
+}
 
 interface WatchHistoryEntry {
   videoId: string;
@@ -34,7 +40,7 @@ export async function saveWatchHistory(
     publishedAt: string;
   }
 ): Promise<void> {
-  const userHistoryRef = collection(db, 'users', userId, 'history');
+  const userHistoryRef = collection(getFirestoreDb(), 'users', userId, 'history');
   const videoDocRef = doc(userHistoryRef, video.videoId);
 
   await setDoc(videoDocRef, {
@@ -50,7 +56,7 @@ export async function saveWatchHistory(
 export async function getWatchHistory(
   userId: string
 ): Promise<WatchHistoryEntry[]> {
-  const userHistoryRef = collection(db, 'users', userId, 'history');
+  const userHistoryRef = collection(getFirestoreDb(), 'users', userId, 'history');
   const q = query(userHistoryRef, orderBy('watchedAt', 'desc'), limit(MAX_HISTORY_ENTRIES));
   const snapshot = await getDocs(q);
 
@@ -58,12 +64,12 @@ export async function getWatchHistory(
 }
 
 export async function clearWatchHistory(userId: string): Promise<void> {
-  const userHistoryRef = collection(db, 'users', userId, 'history');
+  const userHistoryRef = collection(getFirestoreDb(), 'users', userId, 'history');
   const snapshot = await getDocs(userHistoryRef);
 
   if (snapshot.empty) return;
 
-  const batch = writeBatch(db);
+  const batch = writeBatch(getFirestoreDb());
   snapshot.docs.forEach((doc) => {
     batch.delete(doc.ref);
   });
@@ -71,7 +77,7 @@ export async function clearWatchHistory(userId: string): Promise<void> {
 }
 
 export async function getWatchHistoryCount(userId: string): Promise<number> {
-  const userHistoryRef = collection(db, 'users', userId, 'history');
+  const userHistoryRef = collection(getFirestoreDb(), 'users', userId, 'history');
   const snapshot = await getDocs(userHistoryRef);
   return snapshot.size;
 }

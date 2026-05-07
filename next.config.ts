@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  serverExternalPackages: ["lodash"],
+  serverExternalPackages: ["lodash", "firebase", "firebase/app", "firebase/auth", "firebase/firestore"],
 };
 
 export default nextConfig;
