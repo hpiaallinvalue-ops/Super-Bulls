@@ -21,24 +21,63 @@ export interface ChannelInfo {
 // ── RSS Channels — Free, Unlimited, No API Key ─────────────────────────────
 
 export const TRUSTED_CHANNELS: ChannelInfo[] = [
-  // Major Sports Networks
-  { id: 'UCiiljEMOGL7SUhPCrCO-MOg', name: 'ESPN',            category: 'general',    priority: 1 },
-  { id: 'UCDjFJ-YdsJ3VT2zBOPOdqeA', name: 'Sky Sports',      category: 'football',   priority: 2 },
-  { id: 'UC8-ZWfFvkRnN2Lfl8fFbK0A', name: 'Bleacher Report', category: 'general',    priority: 3 },
-  { id: 'UCqZQJ4D8bqG5wjNEiH7kyCQ', name: 'Fox Sports',      category: 'general',    priority: 6 },
+  // ══════════════════════════════════════════════════════════════════════════
+  // Major Sports Networks (General / Multi-Sport)
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCiiljEMOGL7SUhPCrCO-MOg', name: 'ESPN',              category: 'general',    priority: 1 },
+  { id: 'UCDjFJ-YdsJ3VT2zBOPOdqeA', name: 'Sky Sports',        category: 'football',   priority: 2 },
+  { id: 'UC8-ZWfFvkRnN2Lfl8fFbK0A', name: 'Bleacher Report',   category: 'general',    priority: 3 },
+  { id: 'UCqZQJ4D8bqG5wjNEiH7kyCQ', name: 'Fox Sports',        category: 'general',    priority: 6 },
+  { id: 'UCFtK9FVk8cXihz9MW4SVy7w', name: 'The Athletic',      category: 'general',    priority: 9 },
+  { id: 'UCJUCcJUeh0Cz2xyKwkw5Q1w', name: 'beIN SPORTS',       category: 'general',    priority: 10 },
 
-  // League Official Channels
-  { id: 'UCWJ2lWNubArHWmf3FIHbfcQ', name: 'NBA',             category: 'basketball', priority: 4 },
-  { id: 'UCvgfXK4aHYobs0s2FhW6pNg', name: 'UFC',             category: 'mma',        priority: 5 },
-
+  // ══════════════════════════════════════════════════════════════════════════
   // Football / Soccer
-  { id: 'UCs-dSOHbA_J4p76uYIUczWg', name: 'CBS Sports Golazo', category: 'football', priority: 7 },
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UC6c1z7bA__85CIWZ_jpCK-Q', name: 'ESPN FC',                  category: 'football', priority: 11 },
+  { id: 'UCG5qGWdu8nIRZqJ_GgDwQ-w', name: 'Premier League',            category: 'football', priority: 12 },
+  { id: 'UCTv-XvfzLX3i4IGWAm4sbmA', name: 'LaLiga',                    category: 'football', priority: 13 },
+  { id: 'UCs-dSOHbA_J4p76uYIUczWg', name: 'CBS Sports Golazo',         category: 'football', priority: 7 },
 
-  // Combat Sports
-  { id: 'UCAYlEoYwWfkF9nx3GekMwiw', name: 'DAZN Boxing',     category: 'mma',        priority: 8 },
+  // ══════════════════════════════════════════════════════════════════════════
+  // Basketball
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCWJ2lWNubArHWmf3FIHbfcQ', name: 'NBA',               category: 'basketball', priority: 4 },
 
-  // Multi-Sport
-  { id: 'UCFtK9FVk8cXihz9MW4SVy7w', name: 'The Athletic',    category: 'general',    priority: 9 },
+  // ══════════════════════════════════════════════════════════════════════════
+  // Cricket
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCAC3c_TJEj-9zVny-bSSIiA', name: 'BCCI',                    category: 'cricket',    priority: 14 },
+  { id: 'UCt2JXOLNxqry7B_4rRZME3Q', name: 'ICC',                     category: 'cricket',    priority: 15 },
+  { id: 'UC2naOExy27J5Qz3SO-w6xkQ', name: 'Cricket Australia',        category: 'cricket',    priority: 16 },
+  { id: 'UCOkT6dccQ1vsnMFK1xJanmA', name: 'Fox Cricket',              category: 'cricket',    priority: 17 },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // MMA / Combat Sports
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCvgfXK4aHYobs0s2FhW6pNg', name: 'UFC',               category: 'mma',        priority: 5 },
+  { id: 'UCAYlEoYwWfkF9nx3GekMwiw', name: 'DAZN Boxing',       category: 'mma',        priority: 8 },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Tennis
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCbcxFkd6B9xUU54InHv4Tig', name: 'Tennis TV',               category: 'tennis',     priority: 18 },
+  { id: 'UCDitdIjOjS9Myza9I21IqzQ', name: 'Tennis Channel',           category: 'tennis',     priority: 19 },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Baseball
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCoLrcjPV5PbUrUyXq5mjc_A', name: 'MLB',                     category: 'baseball',   priority: 20 },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // American Football
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCDVYQ4Zhbm3S2dlz7P1GBDg', name: 'NFL',                     category: 'football',   priority: 21 },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Motorsport
+  // ══════════════════════════════════════════════════════════════════════════
+  { id: 'UCB_qr75-ydFVKSF9Dmo6izg', name: 'Formula 1',               category: 'other',      priority: 22 },
 ];
 
 // ── Legacy: Kept for backward compat ───────────────────────────────────────
@@ -58,6 +97,20 @@ export const CHANNEL_CATEGORY_MAP: Record<string, string> = {
   'UCs-dSOHbA_J4p76uYIUczWg': 'football',
   'UCAYlEoYwWfkF9nx3GekMwiw': 'mma',
   'UCFtK9FVk8cXihz9MW4SVy7w': 'general',
+  // New channels
+  'UCJUCcJUeh0Cz2xyKwkw5Q1w': 'general',
+  'UC6c1z7bA__85CIWZ_jpCK-Q': 'football',
+  'UCG5qGWdu8nIRZqJ_GgDwQ-w': 'football',
+  'UCTv-XvfzLX3i4IGWAm4sbmA': 'football',
+  'UCAC3c_TJEj-9zVny-bSSIiA': 'cricket',
+  'UCt2JXOLNxqry7B_4rRZME3Q': 'cricket',
+  'UC2naOExy27J5Qz3SO-w6xkQ': 'cricket',
+  'UCOkT6dccQ1vsnMFK1xJanmA': 'cricket',
+  'UCbcxFkd6B9xUU54InHv4Tig': 'tennis',
+  'UCDitdIjOjS9Myza9I21IqzQ': 'tennis',
+  'UCoLrcjPV5PbUrUyXq5mjc_A': 'baseball',
+  'UCDVYQ4Zhbm3S2dlz7P1GBDg': 'football',
+  'UCB_qr75-ydFVKSF9Dmo6izg': 'other',
 };
 
 export const TRUSTED_CHANNEL_IDS = new Set(TRUSTED_CHANNELS.map(c => c.id));
