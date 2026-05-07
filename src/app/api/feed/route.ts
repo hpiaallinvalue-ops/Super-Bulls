@@ -4,16 +4,14 @@
  * No mock data. No fallbacks. Pure live RSS feeds via rss2json.com proxy.
  *
  * Architecture:
- *   - First request: staggered initial load (1.5s between channels,
- *     max 25s total) — returns whatever was fetched in time
+ *   - First request: initial load via poller (syncs channel states)
  *   - Subsequent requests: serve from buffer, fire-and-forget smart poll
  *   - Buffer persists in memory, fills progressively over time
  */
 
 import { NextResponse } from 'next/server';
-import { pollAllChannels, getPollerDiagnostics } from '@/lib/rss-poller';
-import { TRUSTED_CHANNELS, CHANNEL_CATEGORY_MAP } from '@/config/channels';
-import { parseRSSFeed, fetchRSSFeed } from '@/lib/youtube-rss';
+import { pollAllChannels, pollChannelsByIds, getPollerDiagnostics } from '@/lib/rss-poller';
+import { TRUSTED_CHANNELS } from '@/config/channels';
 import { logError, extractErrorInfo } from '@/lib/error-logger';
 import type { Video } from '@/lib/mock-data';
 
@@ -47,40 +45,20 @@ function getFromBuffer(category: string): Video[] {
   return bufferByCategory.get(category) || [];
 }
 
-// ── Staggered Initial Load ─────────────────────────────────────────────────
-// Fetches channels sequentially with a 1.5s gap between each.
-// Staggering avoids overwhelming the event loop and rss2json.com rate limits.
-// Caps total time at 25 seconds — returns whatever was fetched by then.
+// ── Initial Load (synced with poller state) ────────────────────────────────
+// Fetches all channels through the poller so channelStates are kept in sync,
+// preventing duplicate fetches and stale-detection timing issues.
 
 async function initializeBuffer(): Promise<void> {
   if (bufferInitialized) return;
   bufferInitialized = true;
 
-  const channels = [...TRUSTED_CHANNELS].sort((a, b) => a.priority - b.priority);
-  const maxTotalMs = 25_000;
-  const staggerMs = 1500;
-  const startTime = Date.now();
-
-  for (const channel of channels) {
-    // Check if we've exceeded the time budget
-    if (Date.now() - startTime > maxTotalMs) break;
-
-    try {
-      const json = await Promise.race([
-        fetchRSSFeed(channel.id),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000)),
-      ]);
-      const videos = parseRSSFeed(json, channel.name, channel.id);
-      for (const v of videos) v.category = CHANNEL_CATEGORY_MAP[v.channelId] || channel.category;
-      if (videos.length > 0) addToBuffer(videos);
-    } catch {
-      // Skip failed channel — others will still fill the buffer
-    }
-
-    // Stagger to avoid hammering rss2json.com (free tier: 10 req/s)
-    if (Date.now() - startTime + staggerMs < maxTotalMs) {
-      await new Promise(r => setTimeout(r, staggerMs));
-    }
+  // Fetch all channels through the poller so channelStates are synced
+  try {
+    const allVideos = await pollChannelsByIds(TRUSTED_CHANNELS.map(c => c.id));
+    if (allVideos.length > 0) addToBuffer(allVideos);
+  } catch {
+    // Individual channel errors are handled inside pollChannelsByIds
   }
 }
 
@@ -100,10 +78,10 @@ function triggerBackgroundPoll(): void {
     .finally(() => { pollInProgress = false; });
 }
 
-// ── Response Cache (2-min TTL) ────────────────────────────────────────────
+// ── Response Cache (30-sec TTL) ──────────────────────────────────────────
 
 const responseCache = new Map<string, { data: object; timestamp: number }>();
-const CACHE_TTL = 2 * 60 * 1000;
+const CACHE_TTL = 30 * 1000;
 
 function getCachedResponse(key: string): object | null {
   const entry = responseCache.get(key);
@@ -141,7 +119,7 @@ export async function GET(request: Request) {
       });
     }
 
-    // Initial load: wait for staggered fetch to complete (max 25s)
+    // Initial load: fetch all channels through the poller
     if (!bufferInitialized) {
       if (!initialLoadPromise) {
         initialLoadPromise = initializeBuffer().finally(() => { initialLoadPromise = null; });
