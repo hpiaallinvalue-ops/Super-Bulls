@@ -1,12 +1,13 @@
 /**
- * Feed API Route — Non-Blocking RSS with Mock Data Fallback
+ * Feed API Route — Live RSS Data Only
+ *
+ * No mock data. No fallbacks. Pure live RSS feeds via rss2json.com proxy.
  *
  * Architecture:
- *   - First request: fire-and-forget poll all channels, serve mock data immediately
- *   - Subsequent requests: fire-and-forget smart poll, serve from buffer
- *   - Buffer accumulates real RSS data over time (fills in progressively)
- *   - Mock data is always served when buffer has no videos for a category
- *   - Response is ALWAYS fast — never blocks on RSS fetches
+ *   - First request: staggered initial load (1.5s between channels,
+ *     max 25s total) — returns whatever was fetched in time
+ *   - Subsequent requests: serve from buffer, fire-and-forget smart poll
+ *   - Buffer persists in memory, fills progressively over time
  */
 
 import { NextResponse } from 'next/server';
@@ -20,17 +21,14 @@ import type { Video } from '@/lib/mock-data';
 
 const videoBuffer = new Map<string, Video>();
 const bufferByCategory = new Map<string, Video[]>();
+
 let bufferInitialized = false;
 let bufferLastUpdated = 0;
-let mockDataCache: Video[] | null = null;
 let pollInProgress = false;
-
-// ── Buffer Helpers ─────────────────────────────────────────────────────────
+let initialLoadPromise: Promise<void> | null = null;
 
 function addToBuffer(videos: Video[]): void {
-  for (const v of videos) {
-    videoBuffer.set(v.videoId, v);
-  }
+  for (const v of videos) videoBuffer.set(v.videoId, v);
   rebuildCategoryIndex();
   bufferLastUpdated = Date.now();
 }
@@ -49,35 +47,44 @@ function getFromBuffer(category: string): Video[] {
   return bufferByCategory.get(category) || [];
 }
 
-async function getMockData(): Promise<Video[]> {
-  if (!mockDataCache) {
-    const { MOCK_VIDEOS } = await import('@/lib/mock-data');
-    mockDataCache = MOCK_VIDEOS;
+// ── Staggered Initial Load ─────────────────────────────────────────────────
+// Fetches channels sequentially with a 1.5s gap between each.
+// Staggering avoids overwhelming the event loop and rss2json.com rate limits.
+// Caps total time at 25 seconds — returns whatever was fetched by then.
+
+async function initializeBuffer(): Promise<void> {
+  if (bufferInitialized) return;
+  bufferInitialized = true;
+
+  const channels = [...TRUSTED_CHANNELS].sort((a, b) => a.priority - b.priority);
+  const maxTotalMs = 25_000;
+  const staggerMs = 1500;
+  const startTime = Date.now();
+
+  for (const channel of channels) {
+    // Check if we've exceeded the time budget
+    if (Date.now() - startTime > maxTotalMs) break;
+
+    try {
+      const json = await Promise.race([
+        fetchRSSFeed(channel.id),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000)),
+      ]);
+      const videos = parseRSSFeed(json, channel.name, channel.id);
+      for (const v of videos) v.category = CHANNEL_CATEGORY_MAP[v.channelId] || channel.category;
+      if (videos.length > 0) addToBuffer(videos);
+    } catch {
+      // Skip failed channel — others will still fill the buffer
+    }
+
+    // Stagger to avoid hammering rss2json.com (free tier: 10 req/s)
+    if (Date.now() - startTime + staggerMs < maxTotalMs) {
+      await new Promise(r => setTimeout(r, staggerMs));
+    }
   }
-  return mockDataCache;
 }
 
-/**
- * Get videos for a category.
- * Merges RSS buffer with mock data — RSS first, mock fills gaps.
- */
-async function getVideosForCategory(category: string): Promise<Video[]> {
-  const rssVideos = getFromBuffer(category);
-
-  if (category === 'All' && rssVideos.length > 0) {
-    return rssVideos;
-  }
-
-  // For specific categories, check if RSS has content
-  if (rssVideos.length > 0) return rssVideos;
-
-  // Fallback to mock data
-  const mock = await getMockData();
-  if (category === 'All') return mock;
-  return mock.filter(v => v.category === category);
-}
-
-// ── Background Poll (non-blocking) ─────────────────────────────────────────
+// ── Background Poll ────────────────────────────────────────────────────────
 
 function triggerBackgroundPoll(): void {
   if (pollInProgress) return;
@@ -85,51 +92,15 @@ function triggerBackgroundPoll(): void {
 
   pollAllChannels()
     .then(results => {
-      for (const result of results) {
-        if (result.newVideos.length > 0) {
-          addToBuffer(result.newVideos);
-        }
+      for (const r of results) {
+        if (r.newVideos.length > 0) addToBuffer(r.newVideos);
       }
     })
-    .catch(() => { /* silent — buffer may still have content */ })
-    .finally(() => {
-      pollInProgress = false;
-      bufferInitialized = true;
-    });
+    .catch(() => {})
+    .finally(() => { pollInProgress = false; });
 }
 
-async function triggerInitialPoll(): Promise<void> {
-  if (bufferInitialized) return;
-  bufferInitialized = true;
-
-  try {
-    const channelIds = TRUSTED_CHANNELS.map(c => c.id);
-    const settled = await Promise.allSettled(
-      channelIds.map(async (channelId) => {
-        const channel = TRUSTED_CHANNELS.find(c => c.id === channelId)!;
-        try {
-          const xml = await fetchRSSFeed(channelId);
-          const videos = parseRSSFeed(xml, channel.name, channelId);
-          for (const v of videos) {
-            v.category = CHANNEL_CATEGORY_MAP[v.channelId] || channel.category;
-          }
-          return videos;
-        } catch {
-          return [] as Video[];
-        }
-      })
-    );
-    for (const result of settled) {
-      if (result.status === 'fulfilled' && result.value.length > 0) {
-        addToBuffer(result.value);
-      }
-    }
-  } catch {
-    /* silent — mock data will be served */
-  }
-}
-
-// ── Response Cache (2-minute TTL) ─────────────────────────────────────────
+// ── Response Cache (2-min TTL) ────────────────────────────────────────────
 
 const responseCache = new Map<string, { data: object; timestamp: number }>();
 const CACHE_TTL = 2 * 60 * 1000;
@@ -137,23 +108,19 @@ const CACHE_TTL = 2 * 60 * 1000;
 function getCachedResponse(key: string): object | null {
   const entry = responseCache.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.timestamp > CACHE_TTL) {
-    responseCache.delete(key);
-    return null;
-  }
+  if (Date.now() - entry.timestamp > CACHE_TTL) { responseCache.delete(key); return null; }
   return entry.data;
 }
 
 function setCachedResponse(key: string, data: object): void {
   if (responseCache.size > 50) {
-    const oldest = Array.from(responseCache.entries())
-      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const oldest = Array.from(responseCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
     for (let i = 0; i < 10; i++) responseCache.delete(oldest[i][0]);
   }
   responseCache.set(key, { data, timestamp: Date.now() });
 }
 
-// ── GET /api/feed ─────────────────────────────────────────────────────────
+// ── GET /api/feed?category=All&sort=latest&diagnostics=false ──────────────
 
 export async function GET(request: Request) {
   try {
@@ -167,37 +134,31 @@ export async function GET(request: Request) {
         poller: getPollerDiagnostics(),
         buffer: {
           totalVideos: videoBuffer.size,
-          categories: Object.fromEntries(
-            Array.from(bufferByCategory.entries()).map(([k, v]) => [k, v.length])
-          ),
+          categories: Object.fromEntries(Array.from(bufferByCategory.entries()).map(([k, v]) => [k, v.length])),
           lastUpdated: bufferLastUpdated,
           initialized: bufferInitialized,
-          pollInProgress,
         },
-        cache: { entries: responseCache.size, ttl: CACHE_TTL },
       });
     }
 
-    // Fire-and-forget: initial poll on first request (non-blocking)
+    // Initial load: wait for staggered fetch to complete (max 25s)
     if (!bufferInitialized) {
-      // Serve mock data immediately while poll runs in background
-      triggerInitialPoll();
+      if (!initialLoadPromise) {
+        initialLoadPromise = initializeBuffer().finally(() => { initialLoadPromise = null; });
+      }
+      await initialLoadPromise;
     } else if (!pollInProgress) {
-      // Subsequent requests: trigger smart poll in background
       triggerBackgroundPoll();
     }
 
-    // Check response cache
+    // Check cache
     const cacheKey = `${category}_${sort}`;
     const cached = getCachedResponse(cacheKey);
-    if (cached) {
-      return NextResponse.json({ ...(cached as Record<string, unknown>), source: 'cached' });
-    }
+    if (cached) return NextResponse.json({ ...(cached as Record<string, unknown>), source: 'cached' });
 
-    // Always serve from buffer (with mock fallback) — never wait for poll
-    let videos = await getVideosForCategory(category);
+    // Serve from buffer — live data only
+    let videos = getFromBuffer(category);
 
-    // Sort
     if (sort === 'trending') {
       videos = [...videos].sort((a, b) => b.viewCount - a.viewCount);
     } else {
@@ -206,16 +167,12 @@ export async function GET(request: Request) {
       );
     }
 
-    const isUsingMock = videoBuffer.size === 0;
-    const responseData = {
+    return NextResponse.json({
       videos,
-      source: isUsingMock ? 'mock' : 'rss',
+      source: 'rss',
       totalInBuffer: videoBuffer.size,
       channels: TRUSTED_CHANNELS.length,
-    };
-
-    setCachedResponse(cacheKey, responseData);
-    return NextResponse.json(responseData);
+    });
 
   } catch (err) {
     const { message, stack, digest } = extractErrorInfo(err);
